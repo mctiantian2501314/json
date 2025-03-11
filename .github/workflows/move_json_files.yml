@@ -1,52 +1,49 @@
-name: Auto Sync JSON Files
+name: Fast JSON Sync
 
 on:
   push:
     paths:
-      - '*.json'      # 仅当根目录 JSON 文件变化时触发
-    branches:
-      - main           # 根据实际情况修改分支名称
+      - '*.json'
+    branches: [ main ]
 
 jobs:
   sync-json:
     runs-on: ubuntu-latest
+    timeout-minutes: 3  # 设置超时限制
     permissions:
-      contents: write  # 需要写权限提交变更
+      contents: write
 
     steps:
-    - name: Checkout code
+    - name: Checkout (Shallow)
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # 获取完整提交历史
+        fetch-depth: 2  # 浅层克隆加速检出
 
-    - name: Ensure SY directory
-      run: mkdir -p SY
-
-    - name: Migrate JSON files
+    - name: Pre-check JSON files
+      id: file_check
       run: |
-        # 移动根目录所有 JSON 文件（不包含子目录）
-        find . -maxdepth 1 -name "*.json" -exec mv {} SY/ \; || true
-        
-        # 显示操作结果（调试用）
-        echo "迁移后的文件列表："
-        ls -l SY/
+        # 快速检测是否有需要移动的JSON文件
+        count=$(find . -maxdepth 1 -name '*.json' | grep -c .)
+        echo "需要移动的文件数: $count"
+        echo "has_files=$([ $count -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
-    - name: Commit changes
-      id: commit
+    - name: Migrate Files
+      if: steps.file_check.outputs.has_files == 'true'
       run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        
-        # 检测是否有变更
-        if git diff --quiet; then
-          echo "没有需要提交的变更"
-          exit 0
-        else
-          git add .
-          git commit -m "🔧 Auto sync JSON files to SY directory"
-          echo "changes=true" >> $GITHUB_OUTPUT
+        mkdir -p SY
+        # 使用批量移动命令优化性能
+        find . -maxdepth 1 -name '*.json' -exec mv -t SY/ {} + 2>/dev/null || true
+        echo "移动完成，耗时: $SECONDS 秒"
+
+    - name: Smart Commit
+      if: steps.file_check.outputs.has_files == 'true'
+      run: |
+        git config --global user.name "GitHub Bot"
+        git config --global user.email "bot@noreply.github.com"
+        git add -u  # 仅跟踪已修改文件
+        # 使用轻量级提交检测
+        if ! git diff-index --quiet HEAD --; then
+          git commit -m "⚡ Auto-sync JSON files [skip ci]" --no-verify
+          git push
+          echo "变更已提交"
         fi
-
-    - name: Push changes
-      if: steps.commit.outputs.changes == 'true'
-      run: git push
