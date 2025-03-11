@@ -1,4 +1,4 @@
-name: Exact Filename Migration
+name: Secure JSON Migration
 
 on:
   push:
@@ -14,47 +14,49 @@ jobs:
       contents: write
 
     steps:
-    - name: Checkout (Atomic)
+    - name: Checkout Code
       uses: actions/checkout@v4
       with:
         fetch-depth: 2
 
-    - name: Atomic Migration
+    - name: Migrate Files
+      id: migration
       run: |
-        # 创建目标目录（如果不存在）
         mkdir -p SY
-        
-        # 安全迁移文件（处理所有极端情况）
+        # 记录原始文件列表
+        find . -maxdepth 1 -name '*.json' | sed 's#./##' > original_files.txt
+        # 执行带冲突处理的迁移
         find . -maxdepth 1 -type f -name '*.json' -exec sh -c '
           for file do
-            filename=$(basename "$file")
-            dest="SY/$filename"
-            
-            # 检测文件是否已存在
+            dest="SY/$(basename "$file")"
             if [ -e "$dest" ]; then
-              echo "检测到同名文件: $filename"
-              echo "::warning ::文件 $filename 已存在，跳过迁移"
-              continue
+              echo "::warning file=$file::同名文件已存在，执行覆盖"
             fi
-            
-            # 原子操作迁移文件
-            mv --no-clobber -v "$file" "$dest"
+            mv -f "$file" "$dest"
           done
         ' sh {} +
 
-    - name: Verify Integrity
+    - name: Verify Migration
       run: |
-        # 校验文件名一致性
-        echo "校验迁移结果："
-        find . -maxdepth 1 -name '*.json' && { echo "错误：仍有未迁移文件"; exit 1; }
-        find SY -name '*.json' | sed 's#SY/##' | diff <(find . -maxdepth 1 -name '*.json' | sed 's#./##') - || { echo "文件名不一致"; exit 1; }
+        # 生成迁移后文件列表
+        find SY -name '*.json' | sed 's#SY/##' > migrated_files.txt
+        
+        # 使用排序比较差异
+        diff_result=$(comm -23 <(sort original_files.txt) <(sort migrated_files.txt))
+        
+        if [ -n "$diff_result" ]; then
+          echo "::error ::以下文件未成功迁移："
+          echo "$diff_result"
+          exit 1
+        fi
+        echo "校验通过 ✅ 所有文件已迁移"
 
     - name: Commit Changes
       run: |
-        git config --global user.name "File Keeper"
-        git config --global user.email "keeper@noreply.github.com"
-        git add -A
+        git config --global user.name "File Sync Bot"
+        git config --global user.email "bot@noreply.github.com"
+        git add .
         if ! git diff-index --quiet HEAD --; then
-          git commit -m "迁移JSON文件 [hash:$(git rev-parse --short HEAD)]"
+          git commit -m "♻️ 完成JSON文件安全迁移 [skip ci]"
           git push
         fi
