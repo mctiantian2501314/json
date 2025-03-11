@@ -1,4 +1,4 @@
-name: Safe JSON Migration
+name: Exact Filename Migration
 
 on:
   push:
@@ -14,44 +14,47 @@ jobs:
       contents: write
 
     steps:
-    - name: Checkout (Shallow)
+    - name: Checkout (Atomic)
       uses: actions/checkout@v4
       with:
         fetch-depth: 2
 
-    - name: Validate Files
-      id: validation
+    - name: Atomic Migration
       run: |
-        # 使用带引号处理的查找命令
-        file_count=$(find . -maxdepth 1 -name '*.json' -print | grep -c .)
-        echo "检测到 $file_count 个待处理文件"
-        echo "has_files=$([ $file_count -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
-
-    - name: Safe Migration
-      if: steps.validation.outputs.has_files == 'true'
-      run: |
+        # 创建目标目录（如果不存在）
         mkdir -p SY
-        # 使用带引号的安全处理方式
-        find . -maxdepth 1 -name '*.json' -print0 | xargs -0 -I {} mv -v "{}" "SY/"
-        echo "文件迁移完成，保留原始文件名"
+        
+        # 安全迁移文件（处理所有极端情况）
+        find . -maxdepth 1 -type f -name '*.json' -exec sh -c '
+          for file do
+            filename=$(basename "$file")
+            dest="SY/$filename"
+            
+            # 检测文件是否已存在
+            if [ -e "$dest" ]; then
+              echo "检测到同名文件: $filename"
+              echo "::warning ::文件 $filename 已存在，跳过迁移"
+              continue
+            fi
+            
+            # 原子操作迁移文件
+            mv --no-clobber -v "$file" "$dest"
+          done
+        ' sh {} +
 
-    - name: Conflict Check
-      if: steps.validation.outputs.has_files == 'true'
+    - name: Verify Integrity
       run: |
-        # 检测文件名冲突
-        conflict_files=$(git diff --name-only --diff-filter=U)
-        if [ -n "$conflict_files" ]; then
-          echo "发现冲突文件: $conflict_files"
-          exit 1
-        fi
+        # 校验文件名一致性
+        echo "校验迁移结果："
+        find . -maxdepth 1 -name '*.json' && { echo "错误：仍有未迁移文件"; exit 1; }
+        find SY -name '*.json' | sed 's#SY/##' | diff <(find . -maxdepth 1 -name '*.json' | sed 's#./##') - || { echo "文件名不一致"; exit 1; }
 
     - name: Commit Changes
-      if: steps.validation.outputs.has_files == 'true'
       run: |
-        git config --global user.name "File Sync Bot"
-        git config --global user.email "bot@noreply.github.com"
-        git add .
+        git config --global user.name "File Keeper"
+        git config --global user.email "keeper@noreply.github.com"
+        git add -A
         if ! git diff-index --quiet HEAD --; then
-          git commit -m "♻️ 安全迁移JSON文件 [skip ci]" 
+          git commit -m "迁移JSON文件 [hash:$(git rev-parse --short HEAD)]"
           git push
         fi
