@@ -1,4 +1,4 @@
-name: Fast JSON Sync
+name: Safe JSON Migration
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 jobs:
   sync-json:
     runs-on: ubuntu-latest
-    timeout-minutes: 3  # 设置超时限制
+    timeout-minutes: 3
     permissions:
       contents: write
 
@@ -17,33 +17,41 @@ jobs:
     - name: Checkout (Shallow)
       uses: actions/checkout@v4
       with:
-        fetch-depth: 2  # 浅层克隆加速检出
+        fetch-depth: 2
 
-    - name: Pre-check JSON files
-      id: file_check
+    - name: Validate Files
+      id: validation
       run: |
-        # 快速检测是否有需要移动的JSON文件
-        count=$(find . -maxdepth 1 -name '*.json' | grep -c .)
-        echo "需要移动的文件数: $count"
-        echo "has_files=$([ $count -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+        # 使用带引号处理的查找命令
+        file_count=$(find . -maxdepth 1 -name '*.json' -print | grep -c .)
+        echo "检测到 $file_count 个待处理文件"
+        echo "has_files=$([ $file_count -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
-    - name: Migrate Files
-      if: steps.file_check.outputs.has_files == 'true'
+    - name: Safe Migration
+      if: steps.validation.outputs.has_files == 'true'
       run: |
         mkdir -p SY
-        # 使用批量移动命令优化性能
-        find . -maxdepth 1 -name '*.json' -exec mv -t SY/ {} + 2>/dev/null || true
-        echo "移动完成，耗时: $SECONDS 秒"
+        # 使用带引号的安全处理方式
+        find . -maxdepth 1 -name '*.json' -print0 | xargs -0 -I {} mv -v "{}" "SY/"
+        echo "文件迁移完成，保留原始文件名"
 
-    - name: Smart Commit
-      if: steps.file_check.outputs.has_files == 'true'
+    - name: Conflict Check
+      if: steps.validation.outputs.has_files == 'true'
       run: |
-        git config --global user.name "GitHub Bot"
+        # 检测文件名冲突
+        conflict_files=$(git diff --name-only --diff-filter=U)
+        if [ -n "$conflict_files" ]; then
+          echo "发现冲突文件: $conflict_files"
+          exit 1
+        fi
+
+    - name: Commit Changes
+      if: steps.validation.outputs.has_files == 'true'
+      run: |
+        git config --global user.name "File Sync Bot"
         git config --global user.email "bot@noreply.github.com"
-        git add -u  # 仅跟踪已修改文件
-        # 使用轻量级提交检测
+        git add .
         if ! git diff-index --quiet HEAD --; then
-          git commit -m "⚡ Auto-sync JSON files [skip ci]" --no-verify
+          git commit -m "♻️ 安全迁移JSON文件 [skip ci]" 
           git push
-          echo "变更已提交"
         fi
